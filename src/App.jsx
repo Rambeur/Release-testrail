@@ -81,9 +81,10 @@ function parseSlackMessage(text) {
   return allTickets;
 }
 
-// ─── TestRail API helper ──────────────────────────────────────────────────────
+// ─── TestRail API helper (via proxy Vercel /api/testrail) ────────────────────
 
 async function trFetch(base, email, apiKey, path, method = "GET", body = null) {
+  const proxyUrl = "/api/testrail?testrailUrl=" + encodeURIComponent(base) + "&path=" + encodeURIComponent(path);
   const opts = {
     method,
     headers: {
@@ -92,7 +93,7 @@ async function trFetch(base, email, apiKey, path, method = "GET", body = null) {
     },
   };
   if (body) opts.body = JSON.stringify(body);
-  const res = await fetch(base.replace(/\/$/, "") + "/index.php?/api/v2/" + path, opts);
+  const res = await fetch(proxyUrl, opts);
   if (!res.ok) {
     const err = await res.json().catch(() => ({}));
     throw new Error(err.error || "Erreur HTTP " + res.status + " sur " + path);
@@ -198,7 +199,7 @@ async function createCampaign({ base, email, apiKey, projectId, suiteId, tickets
 function TestRailModal({ tickets, nextMonday, onClose }) {
   const getSaved = () => { try { const s = localStorage.getItem("testrail_config"); return s ? JSON.parse(s) : null; } catch { return null; } };
   const saved = getSaved();
-  const [config, setConfig] = useState(saved || { url: "", email: "", apiKey: "", projectId: "", suiteId: "" });
+  const [config, setConfig] = useState(saved || { url: "https://lequipe.testrail.io", email: "iyahia-ext@lequipe.fr", apiKey: "", projectId: "1", suiteId: "1" });
   const [status, setStatus] = useState("idle"); // idle | loading | success | error
   const [steps, setSteps] = useState([]);
   const [result, setResult] = useState(null);
