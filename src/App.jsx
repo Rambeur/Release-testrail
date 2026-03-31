@@ -156,17 +156,22 @@ async function createCampaign({ base, email, apiKey, projectId, suiteId, tickets
   }
 
   // Étape 3 : récupérer les cas du dossier NON REGRESSION
-  onStep("Récupération des cas NON REGRESSION...");
-  const allSections = await trFetch(base, email, apiKey, "get_sections/" + projectId + (resolvedSuiteId ? "?suite_id=" + resolvedSuiteId : ""));
-  // Si pas trouvé avec suite_id, on retente sans pour attraper les sections racine
-  let sections = allSections.sections ?? allSections;
-  let nonRegSection = sections.find(s => s.name.trim().toUpperCase() === "NON REGRESSION");
-  if (!nonRegSection && resolvedSuiteId) {
-    const allSectionsNoSuite = await trFetch(base, email, apiKey, "get_sections/" + projectId);
-    const sectionsNoSuite = allSectionsNoSuite.sections ?? allSectionsNoSuite;
-    nonRegSection = sectionsNoSuite.find(s => s.name.trim().toUpperCase() === "NON REGRESSION");
-    if (nonRegSection) sections = sectionsNoSuite;
+  onStep("Récupération des sections...");
+  // Récupérer TOUTES les sections en paginant (250 par page)
+  let sections = [];
+  let secOffset = 0;
+  while (true) {
+    const resp = await trFetch(base, email, apiKey,
+      "get_sections/" + projectId + "?suite_id=" + resolvedSuiteId + "&limit=250&offset=" + secOffset
+    );
+    const batch = resp.sections ?? resp;
+    sections = sections.concat(batch);
+    if (batch.length < 250) break;
+    secOffset += 250;
   }
+  // Cherche NON REGRESSION par nom, fallback sur ID 42 (connu)
+  const nonRegSection = sections.find(s => s.name.trim().toUpperCase() === "NON REGRESSION")
+    || { id: 42, name: "NON REGRESSION" };
   
   let nonRegCaseIds = [];
   if (nonRegSection) {
