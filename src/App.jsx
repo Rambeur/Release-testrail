@@ -60,32 +60,56 @@ function parseSlackMessage(text) {
     const runName = getRunName(module, nextMonday);
     const sectionHierarchy = module ? runName + " > " + module : runName;
     const tokens = [];
-    // Regex corrigée : gère [TC-1][TC-2] titres multiples + mentions sans capturer newline
-    const tkRegex = /\[([A-Z]+-\d+|NO-TICKET)\]\s*([^\[@\n]*?)(?=\[|@|$|\n)|@([\w\u00C0-\u00FF\-]+(?:[ ]+[\w\u00C0-\u00FF\-]+)*)/g;
-    let m;
-    while ((m = tkRegex.exec(content)) !== null) {
-      if (m[1]) {
-        tokens.push({ type: "ticket", ref: m[1], title: m[2].trim() });
-      } else if (m[3]) {
-        const splitNames = m[3].trim().split(/(?<=[a-z\u00E0-\u00FE])(?=[A-Z\u00C0-\u00DE])/).map(n => n.trim()).filter(Boolean);
-        for (const name of splitNames) {
-          if (!EXCLUDED_NAMES.some(ex => name.includes(ex))) tokens.push({ type: "mention", name });
+    // Parser ligne par ligne pour gérer [NO-TICKET][tag-MR] titre @mention
+    for (const line of content.split("\n")) {
+      const trimmed = line.trim();
+      if (!trimmed) continue;
+      // Extraire les refs tickets en tête de ligne (ignore les [tags] non-tickets entre elles)
+      const headRefs = [];
+      let remaining = trimmed;
+      while (true) {
+        const refMatch = /^\[([A-Z]+-\d+|NO-TICKET)\]/.exec(remaining);
+        if (refMatch) {
+          headRefs.push(refMatch[1]);
+          remaining = remaining.slice(refMatch[0].length);
+        } else if (/^\[[^\]]+\]/.test(remaining)) {
+          // [tag] non-ticket → fait partie du titre, on arrête
+          break;
+        } else {
+          break;
         }
       }
-    }
-    // Propager le titre : si un ticket n'a pas de titre, il prend celui du ticket suivant
-    for (let ti = 0; ti < tokens.length; ti++) {
-      if (tokens[ti].type === "ticket" && !tokens[ti].title) {
-        for (let tj = ti + 1; tj < tokens.length; tj++) {
-          if (tokens[tj].type === "ticket" && tokens[tj].title) {
-            tokens[ti].title = tokens[tj].title;
-            break;
+      if (headRefs.length > 0) {
+        // Sauter les [tags] de MR restants, puis capturer le titre et les mentions
+        const bodyRaw = remaining.replace(/^\s*(?:\[[^\]]+\]\s*)*/, "").trim();
+        const mentions = [];
+        const mentionRe = /@([\w\u00C0-\u00FF\-]+(?:[ ]+[\w\u00C0-\u00FF\-]+)*)/g;
+        let mm;
+        let titleClean = bodyRaw;
+        while ((mm = mentionRe.exec(bodyRaw)) !== null) {
+          const names = mm[1].split(/(?<=[a-z\u00E0-\u00FE])(?=[A-Z\u00C0-\u00DE])/).map(n => n.trim()).filter(Boolean);
+          for (const name of names) {
+            if (!EXCLUDED_NAMES.some(ex => name.includes(ex))) mentions.push(name);
+          }
+          titleClean = titleClean.replace(mm[0], "").trim();
+        }
+        for (const ref of headRefs) {
+          if (titleClean) tokens.push({ type: "ticket", ref, title: titleClean });
+        }
+        for (const name of mentions) tokens.push({ type: "mention", name });
+      } else {
+        // Ligne de mentions pures (@Simon @Mathieu etc.)
+        const mentionRe = /@([\w\u00C0-\u00FF\-]+(?:[ ]+[\w\u00C0-\u00FF\-]+)*)/g;
+        let mm;
+        while ((mm = mentionRe.exec(trimmed)) !== null) {
+          const names = mm[1].split(/(?<=[a-z\u00E0-\u00FE])(?=[A-Z\u00C0-\u00DE])/).map(n => n.trim()).filter(Boolean);
+          for (const name of names) {
+            if (!EXCLUDED_NAMES.some(ex => name.includes(ex))) tokens.push({ type: "mention", name });
           }
         }
       }
     }
-    // Filtrer les tickets sans titre
-    const filteredTokens = tokens.filter(t => t.type !== "ticket" || t.title);
+    const filteredTokens = tokens;
     let i = 0;
     while (i < filteredTokens.length) {
       if (filteredTokens[i].type === "ticket") {
