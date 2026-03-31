@@ -67,7 +67,7 @@ function parseSlackMessage(text) {
         const rawTitle = m[2].replace(/\(MR\)/g, "").trim();
         if (rawTitle) tokens.push({ type: "ticket", ref: m[1], title: rawTitle });
       } else if (m[3]) {
-        const splitNames = m[3].trim().split(/(?<=[a-z\u00C0-\u00FF])(?=[A-Z\u00C0-\u00FF])/).map(n => n.trim()).filter(Boolean);
+        const splitNames = m[3].trim().split(/(?<=[a-z\u00E0-\u00FE])(?=[A-Z\u00C0-\u00DE])/).map(n => n.trim()).filter(Boolean);
         for (const name of splitNames) {
           if (!EXCLUDED_NAMES.some(ex => name.includes(ex))) tokens.push({ type: "mention", name });
         }
