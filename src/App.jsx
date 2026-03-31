@@ -120,15 +120,6 @@ async function trFetch(base, email, apiKey, path, method = "GET", body = null) {
 
 // ─── Config TestRail ──────────────────────────────────────────────────────────
 
-// Assignation automatique selon le préfixe du ticket
-// TC-XXXX → Yann Le Roux (id: 8), TB-XXXX → Ilyes Yahia (id: 6)
-const TR_USER_IDS = { tc: 8, tb: 6 };
-function getAssignedUserId(ref) {
-  if (/^\[?TC-/i.test(ref)) return TR_USER_IDS.tc;
-  if (/^\[?TB-/i.test(ref)) return TR_USER_IDS.tb;
-  return null;
-}
-
 const TR_CONFIG = {
   base: "https://lequipe.testrail.io",
   email: "iyahia-ext@lequipe.fr",
@@ -243,19 +234,6 @@ async function createCampaign({ base, email, apiKey, projectId, suiteId, tickets
       "• " + newCaseIds.length + " cas créés depuis Slack\n" +
       "• " + nonRegCaseIds.length + " cas NON REGRESSION",
   });
-
-  // Étape 5 : assigner les tests du run (TC → Yann Le Roux, TB → Ilyes Yahia)
-  onStep("Assignation des tests...");
-  const runTestsData = await trFetch(base, email, apiKey, "get_tests/" + run.id);
-  const runTests = runTestsData.tests ?? runTestsData;
-  for (const test of runTests) {
-    const assignedTo = getAssignedUserId(test.title);
-    if (assignedTo) {
-      await trFetch(base, email, apiKey, "update_test/" + test.id, "POST", {
-        assignedto_id: assignedTo,
-      });
-    }
-  }
 
   return { run, newCaseIds, nonRegCaseIds, nonRegFound: !!nonRegSection };
 }
