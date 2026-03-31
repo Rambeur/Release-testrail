@@ -121,19 +121,11 @@ async function trFetch(base, email, apiKey, path, method = "GET", body = null) {
 // ─── Config TestRail ──────────────────────────────────────────────────────────
 
 // Assignation automatique selon le préfixe du ticket
-// TC-XXXX → Yann Le Roux, TB-XXXX → Ilyes Yahia
-// Les IDs sont résolus dynamiquement au premier appel
-let TR_USER_IDS = null;
-async function getAssignedUserId(ref, base, email, apiKey) {
-  if (!TR_USER_IDS) {
-    const users = await trFetch(base, email, apiKey, "get_users");
-    TR_USER_IDS = {
-      tc: users.find(u => u.email === "yleroux@lequipe.fr")?.id || null,
-      tb: users.find(u => u.email === "iyahia-ext@lequipe.fr")?.id || null,
-    };
-  }
-  if (/^TC-/i.test(ref)) return TR_USER_IDS.tc;
-  if (/^TB-/i.test(ref)) return TR_USER_IDS.tb;
+// TC-XXXX → Yann Le Roux (id: 8), TB-XXXX → Ilyes Yahia (id: 6)
+const TR_USER_IDS = { tc: 8, tb: 6 };
+function getAssignedUserId(ref) {
+  if (/^\[?TC-/i.test(ref)) return TR_USER_IDS.tc;
+  if (/^\[?TB-/i.test(ref)) return TR_USER_IDS.tb;
   return null;
 }
 
@@ -254,13 +246,10 @@ async function createCampaign({ base, email, apiKey, projectId, suiteId, tickets
 
   // Étape 5 : assigner les tests du run (TC → Yann Le Roux, TB → Ilyes Yahia)
   onStep("Assignation des tests...");
-  await getAssignedUserId("TC-1", base, email, apiKey); // résoudre les IDs une fois
   const runTestsData = await trFetch(base, email, apiKey, "get_tests/" + run.id);
   const runTests = runTestsData.tests ?? runTestsData;
   for (const test of runTests) {
-    const assignedTo = /^\[?TC-/i.test(test.title) ? TR_USER_IDS.tc
-      : /^\[?TB-/i.test(test.title) ? TR_USER_IDS.tb
-      : null;
+    const assignedTo = getAssignedUserId(test.title);
     if (assignedTo) {
       await trFetch(base, email, apiKey, "update_test/" + test.id, "POST", {
         assignedto_id: assignedTo,
