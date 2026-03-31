@@ -1,4 +1,4 @@
-import { useState, useCallback } from "react";
+import { useState, useCallback, useEffect } from "react";
 
 const JIRA_BASE = "https://lequipe.atlassian.net/browse/";
 
@@ -102,6 +102,14 @@ async function trFetch(base, email, apiKey, path, method = "GET", body = null) {
 }
 
 // ─── Logique principale de création de campagne ───────────────────────────────
+
+const TR_CONFIG = {
+  base: "https://lequipe.testrail.io",
+  email: "iyahia-ext@lequipe.fr",
+  apiKey: import.meta.env.VITE_TESTRAIL_API_KEY || "",
+  projectId: "1",
+  suiteId: "1",
+};
 
 async function createCampaign({ base, email, apiKey, projectId, suiteId, tickets, nextMonday, onStep }) {
   const grouped = tickets.reduce((acc, t) => {
@@ -223,51 +231,31 @@ async function createCampaign({ base, email, apiKey, projectId, suiteId, tickets
 // ─── Modal ────────────────────────────────────────────────────────────────────
 
 function TestRailModal({ tickets, nextMonday, onClose }) {
-  const getSaved = () => { try { const s = localStorage.getItem("testrail_config"); return s ? JSON.parse(s) : null; } catch { return null; } };
-  const saved = getSaved();
-  const [config, setConfig] = useState(saved || { url: "https://lequipe.testrail.io", email: "iyahia-ext@lequipe.fr", apiKey: "", projectId: "1", suiteId: "1" });
-  const [status, setStatus] = useState("idle"); // idle | loading | success | error
+  const [status, setStatus] = useState("loading");
   const [steps, setSteps] = useState([]);
   const [result, setResult] = useState(null);
   const [errorMsg, setErrorMsg] = useState("");
-  const [rememberMe, setRememberMe] = useState(!!saved);
 
-  const updateConfig = (field, value) => setConfig(prev => ({ ...prev, [field]: value }));
+  const runUrl = result ? TR_CONFIG.base + "/index.php?/runs/view/" + result.run.id : null;
 
-  const addStep = (msg) => setSteps(prev => [...prev, msg]);
-
-  const handleCreate = async () => {
-    const { url, email, apiKey, projectId } = config;
-    if (!url || !email || !apiKey || !projectId) {
-      setErrorMsg("Merci de remplir tous les champs obligatoires (*).");
-      setStatus("error");
-      return;
-    }
-    if (rememberMe) { try { localStorage.setItem("testrail_config", JSON.stringify(config)); } catch {} }
-    else { try { localStorage.removeItem("testrail_config"); } catch {} }
-
-    setStatus("loading");
-    setSteps([]);
-    setErrorMsg("");
-
-    try {
-      const res = await createCampaign({
-        base: url, email, apiKey,
-        projectId: config.projectId,
-        suiteId: config.suiteId,
-        tickets,
-        nextMonday,
-        onStep: (msg) => setSteps(prev => [...prev, msg]),
-      });
+  useEffect(() => {
+    // Lancer immédiatement à l'ouverture
+    createCampaign({
+      ...TR_CONFIG,
+      projectId: TR_CONFIG.projectId,
+      suiteId: TR_CONFIG.suiteId,
+      tickets,
+      nextMonday,
+      onStep: (msg) => setSteps(prev => [...prev, msg]),
+    }).then(res => {
       setResult(res);
       setStatus("success");
-    } catch (err) {
+    }).catch(err => {
       setErrorMsg(err.message || "Erreur inconnue.");
       setStatus("error");
-    }
-  };
-
-  const runUrl = result ? config.url.replace(/\/$/, "") + "/index.php?/runs/view/" + result.run.id : null;
+    });
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   return (
     <div className="modal-overlay" onClick={(e) => e.target === e.currentTarget && status !== "loading" && onClose()}>
@@ -317,7 +305,7 @@ function TestRailModal({ tickets, nextMonday, onClose }) {
             </div>
             {!result.nonRegFound && (
               <div className="warn-banner">
-                ⚠️ Dossier "NON REGRESSION" introuvable — vérifiez le nom exact dans TestRail.
+                ⚠️ Dossier "NON REGRESSION" introuvable dans TestRail.
               </div>
             )}
             <a href={runUrl} target="_blank" rel="noopener noreferrer" className="btn-testrail-link">
@@ -329,7 +317,20 @@ function TestRailModal({ tickets, nextMonday, onClose }) {
             <button className="btn-ghost" onClick={onClose} style={{marginTop: 8}}>Fermer</button>
           </div>
 
-        ) : status === "loading" ? (
+        ) : status === "error" ? (
+          <div className="modal-body">
+            <div className="error-banner" style={{marginBottom: 0}}>
+              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
+                <circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/>
+              </svg>
+              {errorMsg}
+            </div>
+            <div className="modal-footer" style={{paddingTop: 16}}>
+              <button className="btn-ghost" onClick={onClose}>Fermer</button>
+            </div>
+          </div>
+
+        ) : (
           <div className="modal-body">
             <div className="loading-header">
               <span className="spinner-lg" />
@@ -345,69 +346,6 @@ function TestRailModal({ tickets, nextMonday, onClose }) {
                   {s}
                 </div>
               ))}
-            </div>
-          </div>
-
-        ) : (
-          <div className="modal-body">
-            <div className="what-happens">
-              <p className="what-title">Ce qui va se passer en 1 clic :</p>
-              <div className="what-steps">
-                <div className="what-step"><span className="what-num">1</span>Création du dossier <em>Release du {nextMonday}</em> avec les sous-dossiers par module</div>
-                <div className="what-step"><span className="what-num">2</span>Création des {tickets.length} cas de test dans chaque sous-dossier</div>
-                <div className="what-step"><span className="what-num">3</span>Récupération de tous les cas du dossier <em>NON REGRESSION</em></div>
-                <div className="what-step"><span className="what-num">4</span>Création du Test Run avec tous les cas fusionnés</div>
-              </div>
-            </div>
-
-            <div className="modal-fields">
-              <div className="field-wrap field-full">
-                <label className="field-label">URL TestRail <span className="required-star">*</span></label>
-                <input className="field-input" value={config.url} onChange={e => updateConfig("url", e.target.value)} placeholder="https://votrecompany.testrail.io" />
-              </div>
-              <div className="field-wrap">
-                <label className="field-label">Email <span className="required-star">*</span></label>
-                <input className="field-input" type="email" value={config.email} onChange={e => updateConfig("email", e.target.value)} placeholder="vous@email.com" />
-              </div>
-              <div className="field-wrap">
-                <label className="field-label">
-                  API Key <span className="required-star">*</span>
-                  <a href="https://www.testrail.com/administration/settings/api" target="_blank" rel="noopener noreferrer" className="help-link">Où la trouver ?</a>
-                </label>
-                <input className="field-input" type="password" value={config.apiKey} onChange={e => updateConfig("apiKey", e.target.value)} placeholder="••••••••••••" />
-              </div>
-              <div className="field-wrap">
-                <label className="field-label">Project ID <span className="required-star">*</span></label>
-                <input className="field-input" value={config.projectId} onChange={e => updateConfig("projectId", e.target.value)} placeholder="ex: 4" />
-              </div>
-              <div className="field-wrap">
-                <label className="field-label">Suite ID <span className="optional-tag">optionnel</span></label>
-                <input className="field-input" value={config.suiteId} onChange={e => updateConfig("suiteId", e.target.value)} placeholder="ex: 12" />
-              </div>
-            </div>
-
-            <label className="remember-label">
-              <input type="checkbox" checked={rememberMe} onChange={e => setRememberMe(e.target.checked)} style={{accentColor: "var(--accent)", cursor: "pointer"}} />
-              Mémoriser les paramètres de connexion
-            </label>
-
-            {status === "error" && (
-              <div className="error-banner">
-                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
-                  <circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/>
-                </svg>
-                {errorMsg}
-              </div>
-            )}
-
-            <div className="modal-footer">
-              <button className="btn-ghost" onClick={onClose}>Annuler</button>
-              <button className="btn-testrail" onClick={handleCreate}>
-                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
-                  <path d="M9 11l3 3L22 4"/><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/>
-                </svg>
-                Créer la campagne
-              </button>
             </div>
           </div>
         )}
