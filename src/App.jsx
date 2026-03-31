@@ -158,21 +158,42 @@ async function createCampaign({ base, email, apiKey, projectId, suiteId, tickets
   // Étape 3 : récupérer les cas du dossier NON REGRESSION
   onStep("Récupération des cas NON REGRESSION...");
   const allSections = await trFetch(base, email, apiKey, "get_sections/" + projectId + (resolvedSuiteId ? "?suite_id=" + resolvedSuiteId : ""));
-  const sections = allSections.sections ?? allSections;
-  const nonRegSection = sections.find(s => s.name.trim().toUpperCase() === "NON REGRESSION");
+  // Si pas trouvé avec suite_id, on retente sans pour attraper les sections racine
+  let sections = allSections.sections ?? allSections;
+  let nonRegSection = sections.find(s => s.name.trim().toUpperCase() === "NON REGRESSION");
+  if (!nonRegSection && resolvedSuiteId) {
+    const allSectionsNoSuite = await trFetch(base, email, apiKey, "get_sections/" + projectId);
+    const sectionsNoSuite = allSectionsNoSuite.sections ?? allSectionsNoSuite;
+    nonRegSection = sectionsNoSuite.find(s => s.name.trim().toUpperCase() === "NON REGRESSION");
+    if (nonRegSection) sections = sectionsNoSuite;
+  }
   
   let nonRegCaseIds = [];
   if (nonRegSection) {
-    onStep("Récupération des cas de test NON REGRESSION...");
-    let offset = 0;
-    while (true) {
-      const resp = await trFetch(base, email, apiKey,
-        "get_cases/" + projectId + "?section_id=" + nonRegSection.id + suiteParam + "&limit=250&offset=" + offset
-      );
-      const cases = resp.cases ?? resp;
-      nonRegCaseIds = nonRegCaseIds.concat(cases.map(c => c.id));
-      if (cases.length < 250) break;
-      offset += 250;
+    // Trouver le sous-dossier "Desktop" enfant direct de NON REGRESSION
+    const desktopSection = sections.find(s =>
+      s.name.trim().toLowerCase() === "desktop" && s.parent_id === nonRegSection.id
+    );
+    if (desktopSection) {
+      onStep("Récupération des cas Desktop (NON REGRESSION)...");
+      // Collecter Desktop + tous ses enfants récursivement
+      const getChildIds = (parentId) => {
+        const children = sections.filter(s => s.parent_id === parentId);
+        return [parentId, ...children.flatMap(c => getChildIds(c.id))];
+      };
+      const sectionIds = getChildIds(desktopSection.id);
+      for (const sectionId of sectionIds) {
+        let offset = 0;
+        while (true) {
+          const resp = await trFetch(base, email, apiKey,
+            "get_cases/" + projectId + "?section_id=" + sectionId + suiteParam + "&limit=250&offset=" + offset
+          );
+          const cases = resp.cases ?? resp;
+          nonRegCaseIds = nonRegCaseIds.concat(cases.map(c => c.id));
+          if (cases.length < 250) break;
+          offset += 250;
+        }
+      }
     }
   }
 
