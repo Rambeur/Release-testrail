@@ -60,12 +60,12 @@ function parseSlackMessage(text) {
     const runName = getRunName(module, nextMonday);
     const sectionHierarchy = module ? runName + " > " + module : runName;
     const tokens = [];
-    const tkRegex = /\[([A-Z]+-\d+|NO-TICKET)\](?:\[[^\]]+\])?\s*([^\[]*?)(?=\[|@|$)|@([\w\u00C0-\u00FF\-]+(?:\s+[\w\u00C0-\u00FF\-]+)*)/g;
+    // Regex corrigée : gère [TC-1][TC-2] titres multiples + mentions sans capturer newline
+    const tkRegex = /\[([A-Z]+-\d+|NO-TICKET)\]\s*([^\[@\n]*?)(?=\[|@|$|\n)|@([\w\u00C0-\u00FF\-]+(?:[ ]+[\w\u00C0-\u00FF\-]+)*)/g;
     let m;
     while ((m = tkRegex.exec(content)) !== null) {
       if (m[1]) {
-        const rawTitle = m[2].replace(/\(MR\)/g, "").trim();
-        if (rawTitle) tokens.push({ type: "ticket", ref: m[1], title: rawTitle });
+        tokens.push({ type: "ticket", ref: m[1], title: m[2].trim() });
       } else if (m[3]) {
         const splitNames = m[3].trim().split(/(?<=[a-z\u00E0-\u00FE])(?=[A-Z\u00C0-\u00DE])/).map(n => n.trim()).filter(Boolean);
         for (const name of splitNames) {
@@ -73,13 +73,26 @@ function parseSlackMessage(text) {
         }
       }
     }
+    // Propager le titre : si un ticket n'a pas de titre, il prend celui du ticket suivant
+    for (let ti = 0; ti < tokens.length; ti++) {
+      if (tokens[ti].type === "ticket" && !tokens[ti].title) {
+        for (let tj = ti + 1; tj < tokens.length; tj++) {
+          if (tokens[tj].type === "ticket" && tokens[tj].title) {
+            tokens[ti].title = tokens[tj].title;
+            break;
+          }
+        }
+      }
+    }
+    // Filtrer les tickets sans titre
+    const filteredTokens = tokens.filter(t => t.type !== "ticket" || t.title);
     let i = 0;
-    while (i < tokens.length) {
-      if (tokens[i].type === "ticket") {
+    while (i < filteredTokens.length) {
+      if (filteredTokens[i].type === "ticket") {
         const groupTickets = [];
-        while (i < tokens.length && tokens[i].type === "ticket") { groupTickets.push(tokens[i]); i++; }
+        while (i < filteredTokens.length && filteredTokens[i].type === "ticket") { groupTickets.push(filteredTokens[i]); i++; }
         const groupMentions = [];
-        while (i < tokens.length && tokens[i].type === "mention") { groupMentions.push(tokens[i].name); i++; }
+        while (i < filteredTokens.length && filteredTokens[i].type === "mention") { groupMentions.push(filteredTokens[i].name); i++; }
         for (const ticket of groupTickets) {
           allTickets.push({
             id: crypto.randomUUID(),
