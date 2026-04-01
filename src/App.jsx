@@ -209,7 +209,7 @@ async function createCampaign({ base, email, apiKey, projectId, suiteId, tickets
       const created = await trFetch(base, email, apiKey, "add_case/" + subSection.id, "POST", {
         title: ticket.title,
         custom_expected: ticket.expectedResult || "",
-        refs: ticket.ref !== "NO-TICKET" ? ticket.ref : "",
+        refs: ticket.references || "",
       });
       newCaseIds.push(created.id);
     }
