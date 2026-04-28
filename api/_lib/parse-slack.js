@@ -25,8 +25,16 @@ function parseSlackMessage(text) {
   const nextMonday = getNextMonday();
 
   text = text
+    // Supprimer les liens Slack formatés : (<https://...|MR>) ou <https://...|texte>
+    .replace(/\(<https?:\/\/[^>]+>\)/g, "")
+    .replace(/<https?:\/\/[^>]+>/g, "")
+    // Supprimer le barré Slack
     .replace(/~~[^~]*~~/g, "")
+    // Supprimer les (MR) restants en texte brut
     .replace(/\(MR\)/g, "")
+    // Normaliser [NO -TICKET] / [NO- TICKET] → [NO-TICKET]
+    .replace(/\[NO\s*-\s*TICKET\]/gi, "[NO-TICKET]")
+    // Entourer les refs sans crochets
     .replace(/(?<!\[)\b([A-Z]+-\d+)\b(?!\])/g, "[$1]");
 
   const goprodMatches = [];

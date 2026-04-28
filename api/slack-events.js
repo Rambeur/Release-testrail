@@ -34,6 +34,29 @@ function verifySlackSignature(signingSecret, rawBody, timestamp, signature) {
   }
 }
 
+// Résout les mentions Slack <@U12345> → @Prénom Nom via users.info
+async function resolveUserMentions(text, token) {
+  const ids = [...new Set([...text.matchAll(/<@(U[A-Z0-9]+)>/g)].map((m) => m[1]))];
+  if (ids.length === 0) return text;
+
+  const names = {};
+  await Promise.all(
+    ids.map(async (id) => {
+      try {
+        const res = await fetch(`https://slack.com/api/users.info?user=${id}`, {
+          headers: { Authorization: "Bearer " + token },
+        });
+        const data = await res.json();
+        names[id] = data.ok ? (data.user.real_name || data.user.profile?.display_name || id) : id;
+      } catch {
+        names[id] = id;
+      }
+    })
+  );
+
+  return text.replace(/<@(U[A-Z0-9]+)>/g, (_, id) => "@" + (names[id] || id));
+}
+
 async function postToSlack(token, channel, text, threadTs) {
   const body = { channel, text, ...(threadTs ? { thread_ts: threadTs } : {}) };
   const res = await fetch("https://slack.com/api/chat.postMessage", {
@@ -59,7 +82,8 @@ async function processSlackEvent(event, token) {
   };
 
   try {
-    const tickets = parseSlackMessage(event.text);
+    const resolvedText = await resolveUserMentions(event.text, token);
+    const tickets = parseSlackMessage(resolvedText);
 
     if (tickets.length === 0) {
       await postToSlack(token, event.channel, "⚠️ Aucun ticket trouvé dans le message.", event.ts);
