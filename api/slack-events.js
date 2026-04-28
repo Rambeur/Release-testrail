@@ -94,24 +94,27 @@ async function processSlackEvent(event, token) {
     await postToSlack(
       token,
       event.channel,
-      `⏳ Création de la campagne TestRail en cours... (${tickets.length} ticket${tickets.length > 1 ? "s" : ""} détecté${tickets.length > 1 ? "s" : ""})`,
+      `⏳ ${tickets.length} ticket${tickets.length > 1 ? "s" : ""} détecté${tickets.length > 1 ? "s" : ""}, vérification de la campagne en cours...`,
       event.ts
     );
 
     const result = await createCampaignServer({ ...TR, tickets });
     const runUrl = `${TR.base}/index.php?/runs/view/${result.run.id}`;
-    const total = result.newCaseIds.length + result.nonRegCaseIds.length;
 
-    const lines = [
-      `✅ *Campagne créée !*`,
-      `• ${result.newCaseIds.length} cas depuis Slack`,
-      `• ${result.nonRegCaseIds.length} cas NON REGRESSION`,
-      `• *${total}* cas au total dans le run`,
-    ];
-    if (!result.nonRegFound) {
-      lines.push(`⚠️ Dossier "NON REGRESSION" introuvable dans TestRail.`);
-    }
-    lines.push(`<${runUrl}|Ouvrir dans TestRail>`);
+    const lines = result.isUpdate
+      ? [
+          `✅ *${tickets[0]?.runName} — mis à jour*`,
+          `• ${result.newCaseIds.length} nouveau${result.newCaseIds.length > 1 ? "x" : ""} cas ajouté${result.newCaseIds.length > 1 ? "s" : ""}`,
+          `<${runUrl}|Ouvrir dans TestRail>`,
+        ]
+      : [
+          `✅ *Campagne créée !*`,
+          `• ${result.newCaseIds.length} cas depuis Slack`,
+          `• ${result.nonRegCaseIds?.length ?? 0} cas NON REGRESSION`,
+          `• *${result.newCaseIds.length + (result.nonRegCaseIds?.length ?? 0)}* cas au total`,
+          ...(result.nonRegFound === false ? [`⚠️ Dossier "NON REGRESSION" introuvable.`] : []),
+          `<${runUrl}|Ouvrir dans TestRail>`,
+        ];
 
     await postToSlack(token, event.channel, lines.join("\n"), event.ts);
   } catch (err) {
