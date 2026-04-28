@@ -25,8 +25,11 @@ function parseSlackMessage(text) {
   const nextMonday = getNextMonday();
 
   text = text
-    // Supprimer les liens Slack formatés : (<https://...|MR>) ou <https://...|texte>
+    // Supprimer les liens Slack formatés entre parenthèses : (<https://...|MR>)
     .replace(/\(<https?:\/\/[^>]+>\)/g, "")
+    // Extraire le texte d'affichage des liens Slack : <https://...|TC-15376> → TC-15376
+    .replace(/<https?:\/\/[^|>]*\|([^>]+)>/g, "$1")
+    // Supprimer les liens Slack sans texte : <https://...>
     .replace(/<https?:\/\/[^>]+>/g, "")
     // Supprimer le barré Slack
     .replace(/~~[^~]*~~/g, "")
