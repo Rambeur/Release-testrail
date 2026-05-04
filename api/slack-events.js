@@ -81,21 +81,21 @@ async function processSlackEvent(event, token) {
     suiteId: "1",
   };
 
+  const targetChannel = process.env.SLACK_TARGET_CHANNEL || event.channel;
+
   try {
     const resolvedText = await resolveUserMentions(event.text, token);
     const tickets = parseSlackMessage(resolvedText);
 
     if (tickets.length === 0) {
-      await postToSlack(token, event.channel, "⚠️ Aucun ticket trouvé dans le message.", event.ts);
+      await postToSlack(token, targetChannel, `⚠️ Aucun ticket trouvé dans le message de <#${event.channel}>.`);
       return;
     }
 
-    // Accusé de réception immédiat dans le thread
     await postToSlack(
       token,
-      event.channel,
-      `⏳ ${tickets.length} ticket${tickets.length > 1 ? "s" : ""} détecté${tickets.length > 1 ? "s" : ""}, vérification de la campagne en cours...`,
-      event.ts
+      targetChannel,
+      `⏳ *<#${event.channel}>* — ${tickets.length} ticket${tickets.length > 1 ? "s" : ""} détecté${tickets.length > 1 ? "s" : ""}, vérification de la campagne en cours...`
     );
 
     const result = await createCampaignServer({ ...TR, tickets });
@@ -103,12 +103,12 @@ async function processSlackEvent(event, token) {
 
     const lines = result.isUpdate
       ? [
-          `✅ *${tickets[0]?.runName} — mis à jour*`,
+          `✅ *${tickets[0]?.runName} — mis à jour* (depuis <#${event.channel}>)`,
           `• ${result.newCaseIds.length} nouveau${result.newCaseIds.length > 1 ? "x" : ""} cas ajouté${result.newCaseIds.length > 1 ? "s" : ""}`,
           `<${runUrl}|Ouvrir dans TestRail>`,
         ]
       : [
-          `✅ *Campagne créée !*`,
+          `✅ *Campagne créée !* (depuis <#${event.channel}>)`,
           `• ${result.newCaseIds.length} cas depuis Slack`,
           `• ${result.nonRegCaseIds?.length ?? 0} cas NON REGRESSION`,
           `• *${result.newCaseIds.length + (result.nonRegCaseIds?.length ?? 0)}* cas au total`,
@@ -116,13 +116,12 @@ async function processSlackEvent(event, token) {
           `<${runUrl}|Ouvrir dans TestRail>`,
         ];
 
-    await postToSlack(token, event.channel, lines.join("\n"), event.ts);
+    await postToSlack(token, targetChannel, lines.join("\n"));
   } catch (err) {
     await postToSlack(
       token,
-      event.channel,
-      `❌ Erreur lors de la création : ${err.message}`,
-      event.ts
+      targetChannel,
+      `❌ Erreur (depuis <#${event.channel}>) : ${err.message}`
     );
   }
 }
