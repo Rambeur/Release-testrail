@@ -31,6 +31,9 @@ function parseSlackMessage(text) {
     .replace(/<https?:\/\/[^|>]*\|([^>]+)>/g, "$1")
     // Supprimer les liens Slack sans texte : <https://...>
     .replace(/<https?:\/\/[^>]+>/g, "")
+    // Supprimer le formatage gras/italique Slack : *text* → text, _text_ → text
+    .replace(/\*([^*\n]+)\*/g, "$1")
+    .replace(/_([^_\n]+)_/g, "$1")
     // Supprimer le barré Slack
     .replace(/~~[^~]*~~/g, "")
     // Supprimer les (MR) restants en texte brut
