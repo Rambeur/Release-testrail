@@ -87,6 +87,12 @@ async function processSlackEvent(event, token) {
     const resolvedText = await resolveUserMentions(event.text, token);
     const tickets = parseSlackMessage(resolvedText);
 
+    if (process.env.DEBUG_SLACK === "1") {
+      await postToSlack(token, targetChannel,
+        `🔍 *DEBUG*\n\`\`\`${resolvedText.slice(0, 500)}\`\`\`\nrunName: \`${tickets[0]?.runName ?? "—"}\` | tickets: ${tickets.map(t => t.ref).join(", ") || "aucun"}`
+      );
+    }
+
     if (tickets.length === 0) {
       await postToSlack(token, targetChannel, `⚠️ Aucun ticket trouvé dans le message de <#${event.channel}>.`);
       return;
