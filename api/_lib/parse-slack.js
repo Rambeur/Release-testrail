@@ -16,8 +16,10 @@ function getNextMonday(from = new Date()) {
 
 function getRunName(module, nextMonday) {
   if (!module) return "Release web du " + nextMonday;
-  if (/^and-/i.test(module)) return "Release " + module;
-  if (/^ios-/i.test(module)) return "Release " + module;
+  const android = /^and-(.+)/i.exec(module);
+  if (android) return "Release Android " + android[1];
+  const ios = /^ios-(.+)/i.exec(module);
+  if (ios) return "Release iOS " + ios[1];
   return "Release web du " + nextMonday;
 }
 

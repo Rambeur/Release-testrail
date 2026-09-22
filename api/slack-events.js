@@ -1,12 +1,33 @@
 import crypto from "node:crypto";
 import { waitUntil } from "@vercel/functions";
 import { parseSlackMessage } from "./_lib/parse-slack.js";
-import { createCampaignServer } from "./_lib/testrail-api.js";
+import { createCampaignServer, openWebReleaseWindow, getOpenWebWindowRunName } from "./_lib/testrail-api.js";
 
 // Désactive le body parser Vercel pour pouvoir vérifier la signature HMAC
 export const config = {
   api: { bodyParser: false },
 };
+
+// ─── Routage par channel ──────────────────────────────────────────────────────
+// Chaque channel surveillé est mappé à sa "famille" : le bot ignore silencieusement
+// tout message provenant d'un channel absent de cette liste.
+
+const CHANNEL_FAMILY = Object.fromEntries(
+  [
+    [process.env.SLACK_CHANNEL_WEB, "web"],
+    [process.env.SLACK_CHANNEL_ANDROID, "android"],
+    [process.env.SLACK_CHANNEL_IOS, "ios"],
+  ].filter(([id]) => Boolean(id))
+);
+
+// Ouverture de la fenêtre "Release Web" : détectée depuis le message d'annonce du
+// release manager, qui contient toujours un token du type "web-2026.09.28".
+const WEB_RELEASE_OPEN_RE = /\bweb-(\d{4})\.(\d{2})\.(\d{2})\b/;
+const WEB_WINDOW_HOURS = 72; // "les 3 prochains jours"
+
+// Android/iOS : une seule release = un seul message avec l'en-tête "goprod and-X.Y.Z"
+// ou "goprod ios-X.Y.Z" ; pas de fenêtre temporelle nécessaire.
+const PLATFORM_PREFIX = { android: /^and-/i, ios: /^ios-/i };
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
@@ -70,9 +91,97 @@ async function postToSlack(token, channel, text, threadTs) {
   return res.json();
 }
 
+function formatExpiry(iso) {
+  const d = new Date(iso);
+  return (
+    String(d.getDate()).padStart(2, "0") + "/" +
+    String(d.getMonth() + 1).padStart(2, "0") + "/" +
+    d.getFullYear() + " " +
+    String(d.getHours()).padStart(2, "0") + "h" +
+    String(d.getMinutes()).padStart(2, "0")
+  );
+}
+
+async function debugLog(token, targetChannel, family, resolvedText, tickets) {
+  if (process.env.DEBUG_SLACK !== "1") return;
+  await postToSlack(
+    token, targetChannel,
+    `🔍 *DEBUG* (${family})\n\`\`\`${resolvedText.slice(0, 500)}\`\`\`\nrunName: \`${tickets[0]?.runName ?? "—"}\` | tickets: ${tickets.map((t) => t.ref).join(", ") || "aucun"}`
+  );
+}
+
 // ─── Traitement principal (s'exécute en arrière-plan après la réponse 200) ───
 
-async function processSlackEvent(event, token) {
+async function postCampaignResult(token, targetChannel, event, TR, tickets) {
+  await postToSlack(
+    token,
+    targetChannel,
+    `⏳ *<#${event.channel}>* — ${tickets.length} ticket${tickets.length > 1 ? "s" : ""} détecté${tickets.length > 1 ? "s" : ""}, vérification de la campagne en cours...`
+  );
+
+  const result = await createCampaignServer({ ...TR, tickets });
+  const runUrl = `${TR.base}/index.php?/runs/view/${result.run.id}`;
+
+  const lines = result.isUpdate
+    ? [
+        `✅ *${tickets[0]?.runName} — mis à jour* (depuis <#${event.channel}>)`,
+        `• ${result.newCaseIds.length} nouveau${result.newCaseIds.length > 1 ? "x" : ""} cas ajouté${result.newCaseIds.length > 1 ? "s" : ""}`,
+        `<${runUrl}|Ouvrir dans TestRail>`,
+      ]
+    : [
+        `✅ *Campagne créée !* (depuis <#${event.channel}>)`,
+        `• ${result.newCaseIds.length} cas depuis Slack`,
+        `• ${result.nonRegCaseIds?.length ?? 0} cas NON REGRESSION`,
+        `• *${result.newCaseIds.length + (result.nonRegCaseIds?.length ?? 0)}* cas au total`,
+        ...(result.nonRegFound === false ? [`⚠️ Dossier "NON REGRESSION" introuvable.`] : []),
+        `<${runUrl}|Ouvrir dans TestRail>`,
+      ];
+
+  await postToSlack(token, targetChannel, lines.join("\n"));
+}
+
+async function handleWebChannel(event, token, TR, targetChannel, resolvedText) {
+  const openMatch = WEB_RELEASE_OPEN_RE.exec(resolvedText);
+  if (openMatch) {
+    const [, year, month, day] = openMatch;
+    const runName = `Release web du ${day}/${month}/${year}`;
+    const { expiresAt } = await openWebReleaseWindow({ ...TR, runName, hoursValid: WEB_WINDOW_HOURS });
+    await postToSlack(
+      token,
+      targetChannel,
+      `🟢 *Fenêtre Release Web ouverte* (depuis <#${event.channel}>)\nLes messages "goprod" seront pris en compte jusqu'au ${formatExpiry(expiresAt)}.`
+    );
+    return;
+  }
+
+  const tickets = parseSlackMessage(resolvedText);
+  await debugLog(token, targetChannel, "web", resolvedText, tickets);
+  if (tickets.length === 0) return; // pas une entrée de release, on ignore silencieusement
+
+  const openRunName = await getOpenWebWindowRunName(TR);
+  if (!openRunName) return; // hors fenêtre de release, on ignore silencieusement
+
+  const adjustedTickets = tickets.map((t) => ({
+    ...t,
+    runName: openRunName,
+    sectionHierarchy: t.section ? openRunName + " > " + t.section : openRunName,
+  }));
+
+  await postCampaignResult(token, targetChannel, event, TR, adjustedTickets);
+}
+
+async function handleAppChannel(event, token, TR, targetChannel, resolvedText, family) {
+  const tickets = parseSlackMessage(resolvedText);
+  await debugLog(token, targetChannel, family, resolvedText, tickets);
+  if (tickets.length === 0) return;
+
+  const expectedPrefix = PLATFORM_PREFIX[family];
+  if (!expectedPrefix.test(tickets[0].section || "")) return; // mauvais format pour ce channel
+
+  await postCampaignResult(token, targetChannel, event, TR, tickets);
+}
+
+async function processSlackEvent(event, token, family) {
   const TR = {
     base: "https://lequipe.testrail.io",
     email: "iyahia-ext@lequipe.fr",
@@ -85,44 +194,12 @@ async function processSlackEvent(event, token) {
 
   try {
     const resolvedText = await resolveUserMentions(event.text, token);
-    const tickets = parseSlackMessage(resolvedText);
 
-    if (process.env.DEBUG_SLACK === "1") {
-      await postToSlack(token, targetChannel,
-        `🔍 *DEBUG*\n\`\`\`${resolvedText.slice(0, 500)}\`\`\`\nrunName: \`${tickets[0]?.runName ?? "—"}\` | tickets: ${tickets.map(t => t.ref).join(", ") || "aucun"}`
-      );
+    if (family === "web") {
+      await handleWebChannel(event, token, TR, targetChannel, resolvedText);
+    } else {
+      await handleAppChannel(event, token, TR, targetChannel, resolvedText, family);
     }
-
-    if (tickets.length === 0) {
-      await postToSlack(token, targetChannel, `⚠️ Aucun ticket trouvé dans le message de <#${event.channel}>.`);
-      return;
-    }
-
-    await postToSlack(
-      token,
-      targetChannel,
-      `⏳ *<#${event.channel}>* — ${tickets.length} ticket${tickets.length > 1 ? "s" : ""} détecté${tickets.length > 1 ? "s" : ""}, vérification de la campagne en cours...`
-    );
-
-    const result = await createCampaignServer({ ...TR, tickets });
-    const runUrl = `${TR.base}/index.php?/runs/view/${result.run.id}`;
-
-    const lines = result.isUpdate
-      ? [
-          `✅ *${tickets[0]?.runName} — mis à jour* (depuis <#${event.channel}>)`,
-          `• ${result.newCaseIds.length} nouveau${result.newCaseIds.length > 1 ? "x" : ""} cas ajouté${result.newCaseIds.length > 1 ? "s" : ""}`,
-          `<${runUrl}|Ouvrir dans TestRail>`,
-        ]
-      : [
-          `✅ *Campagne créée !* (depuis <#${event.channel}>)`,
-          `• ${result.newCaseIds.length} cas depuis Slack`,
-          `• ${result.nonRegCaseIds?.length ?? 0} cas NON REGRESSION`,
-          `• *${result.newCaseIds.length + (result.nonRegCaseIds?.length ?? 0)}* cas au total`,
-          ...(result.nonRegFound === false ? [`⚠️ Dossier "NON REGRESSION" introuvable.`] : []),
-          `<${runUrl}|Ouvrir dans TestRail>`,
-        ];
-
-    await postToSlack(token, targetChannel, lines.join("\n"));
   } catch (err) {
     await postToSlack(
       token,
@@ -168,11 +245,14 @@ export default async function handler(req, res) {
     !event ||
     event.type !== "message" ||
     event.bot_id ||        // ignorer les messages du bot lui-même
-    event.subtype ||       // ignorer edits, deletions, etc.
-    !event.text?.toLowerCase().includes("goprod")
+    event.subtype           // ignorer edits, deletions, etc.
   ) {
     return res.status(200).end();
   }
+
+  // Étape 4 : seuls les 3 channels de release configurés sont traités
+  const family = CHANNEL_FAMILY[event.channel];
+  if (!family) return res.status(200).end();
 
   const token = process.env.SLACK_BOT_TOKEN;
   if (!token) {
@@ -180,7 +260,7 @@ export default async function handler(req, res) {
     return res.status(500).json({ error: "Configuration manquante" });
   }
 
-  // Étape 4 : planifier le traitement en arrière-plan, répondre 200 à Slack immédiatement
-  waitUntil(processSlackEvent(event, token));
+  // Étape 5 : planifier le traitement en arrière-plan, répondre 200 à Slack immédiatement
+  waitUntil(processSlackEvent(event, token, family));
   return res.status(200).end();
 }

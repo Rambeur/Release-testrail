@@ -214,6 +214,67 @@ async function createNewCampaign({ base, email, apiKey, projectId, suiteId, tick
   return { run, newCaseIds, nonRegCaseIds, nonRegFound: !!nonRegSection, isUpdate: false };
 }
 
+// ─── Fenêtre de release Web (auto-détectée depuis Slack, expire automatiquement) ──
+
+const WINDOW_MARKER_RE = /\[release-window expires=([^\]]+)\]/;
+
+async function getNonCompletedRuns(base, email, apiKey, projectId, suiteId) {
+  let runs = [];
+  let offset = 0;
+  while (true) {
+    const resp = await trFetch(
+      base, email, apiKey,
+      "get_runs/" + projectId + "?suite_id=" + suiteId + "&is_completed=0&limit=50&offset=" + offset
+    );
+    const batch = resp.runs ?? resp;
+    runs = runs.concat(batch);
+    if (batch.length < 50) break;
+    offset += 50;
+  }
+  return runs;
+}
+
+// Ouvre (ou prolonge) la fenêtre en stockant l'expiration dans la description du run.
+// Le run est créé vide si besoin : les entrées "goprod" suivantes s'y ajoutent via
+// le chemin addToExistingCampaign normal, qui ne touche jamais la description.
+async function openWebReleaseWindow({ base, email, apiKey, projectId, suiteId, runName, hoursValid }) {
+  const resolvedSuiteId = parseInt(suiteId);
+  const expiresAt = new Date(Date.now() + hoursValid * 3600 * 1000).toISOString();
+  const marker = `[release-window expires=${expiresAt}]`;
+
+  const existingRun = await findExistingRun(base, email, apiKey, projectId, resolvedSuiteId, runName);
+  if (existingRun) {
+    await trFetch(base, email, apiKey, "update_run/" + existingRun.id, "POST", { description: marker });
+  } else {
+    await trFetch(base, email, apiKey, "add_run/" + projectId, "POST", {
+      name: runName,
+      include_all: false,
+      case_ids: [],
+      suite_id: resolvedSuiteId,
+      description: marker,
+    });
+  }
+
+  return { runName, expiresAt };
+}
+
+// Retourne le nom du run actuellement couvert par une fenêtre de release non expirée, sinon null.
+async function getOpenWebWindowRunName({ base, email, apiKey, projectId, suiteId }) {
+  const resolvedSuiteId = parseInt(suiteId);
+  const runs = await getNonCompletedRuns(base, email, apiKey, projectId, resolvedSuiteId);
+
+  let best = null;
+  for (const run of runs) {
+    const match = WINDOW_MARKER_RE.exec(run.description || "");
+    if (!match) continue;
+    const expiresAt = new Date(match[1]).getTime();
+    if (Number.isNaN(expiresAt) || expiresAt <= Date.now()) continue;
+    if (!best || expiresAt > best.expiresAt) best = { name: run.name, expiresAt };
+  }
+
+  return best?.name ?? null;
+}
+
 // ─── Point d'entrée principal ─────────────────────────────────────────────────
 
 async function createCampaignServer({ base, email, apiKey, projectId, suiteId, tickets }) {
@@ -229,4 +290,4 @@ async function createCampaignServer({ base, email, apiKey, projectId, suiteId, t
   return createNewCampaign({ base, email, apiKey, projectId, suiteId: resolvedSuiteId, tickets });
 }
 
-export { createCampaignServer };
+export { createCampaignServer, openWebReleaseWindow, getOpenWebWindowRunName };
