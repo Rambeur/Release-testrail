@@ -2,6 +2,7 @@ import crypto from "node:crypto";
 import { waitUntil } from "@vercel/functions";
 import { parseSlackMessage } from "./_lib/parse-slack.js";
 import { createCampaignServer, openWebReleaseWindow, getOpenWebWindowRunName } from "./_lib/testrail-api.js";
+import { setCurrentVersion } from "./_lib/release-state.js";
 
 // Désactive le body parser Vercel pour pouvoir vérifier la signature HMAC
 export const config = {
@@ -28,6 +29,12 @@ const WEB_WINDOW_HOURS = 72; // "les 3 prochains jours"
 // Android/iOS : une seule release = un seul message avec l'en-tête "goprod and-X.Y.Z"
 // ou "goprod ios-X.Y.Z" ; pas de fenêtre temporelle nécessaire.
 const PLATFORM_PREFIX = { android: /^and-/i, ios: /^ios-/i };
+
+// Version couramment en prod : détectée depuis le thème du channel, changé manuellement
+// par l'équipe à chaque palier de rollout ("and-10.66.1 dispo sur le store (2,5%)",
+// "ios-10.63.0 en déploiement progressif"). On écrase à chaque changement, peu importe
+// le %, dès qu'un nouveau numéro de version apparaît : c'est la version réellement sortie.
+const TOPIC_VERSION_RE = /(?:and|ios)-(\d+\.\d+\.\d+)/i;
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
@@ -209,6 +216,23 @@ async function processSlackEvent(event, token, family) {
   }
 }
 
+async function handleTopicChange(event, token, family) {
+  const match = TOPIC_VERSION_RE.exec(event.topic || "");
+  if (!match) return; // thème sans version reconnaissable, on ignore silencieusement
+
+  const targetChannel = process.env.SLACK_TARGET_CHANNEL || event.channel;
+  try {
+    await setCurrentVersion(family, match[1]);
+    await postToSlack(
+      token,
+      targetChannel,
+      `✅ Version courante *${family}* enregistrée : \`${match[1]}\` (depuis <#${event.channel}>)`
+    );
+  } catch (err) {
+    await postToSlack(token, targetChannel, `❌ Erreur enregistrement version (${family}) : ${err.message}`);
+  }
+}
+
 // ─── Handler Vercel ──────────────────────────────────────────────────────────
 
 export default async function handler(req, res) {
@@ -240,17 +264,21 @@ export default async function handler(req, res) {
   }
 
   // Étape 3 : filtrage des events
+  // Un changement de thème de channel arrive avec subtype "channel_topic" : on le laisse
+  // passer (c'est notre signal de version en prod), tout autre subtype (edit, delete, etc.)
+  // reste ignoré.
   const event = body.event;
+  const isTopicChange = event?.type === "message" && event?.subtype === "channel_topic";
   if (
     !event ||
     event.type !== "message" ||
     event.bot_id ||        // ignorer les messages du bot lui-même
-    event.subtype           // ignorer edits, deletions, etc.
+    (event.subtype && !isTopicChange)
   ) {
     return res.status(200).end();
   }
 
-  // Étape 4 : seuls les 3 channels de release configurés sont traités
+  // Étape 4 : seuls les channels de release configurés sont traités
   const family = CHANNEL_FAMILY[event.channel];
   if (!family) return res.status(200).end();
 
@@ -261,6 +289,11 @@ export default async function handler(req, res) {
   }
 
   // Étape 5 : planifier le traitement en arrière-plan, répondre 200 à Slack immédiatement
+  if (isTopicChange) {
+    if (family === "android" || family === "ios") waitUntil(handleTopicChange(event, token, family));
+    return res.status(200).end();
+  }
+
   waitUntil(processSlackEvent(event, token, family));
   return res.status(200).end();
 }

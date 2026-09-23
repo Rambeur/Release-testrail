@@ -2,6 +2,7 @@
   "rewrites": [
     { "source": "/api/testrail", "destination": "/api/testrail" },
     { "source": "/api/slack-events", "destination": "/api/slack-events" },
+    { "source": "/api/slack-command", "destination": "/api/slack-command" },
     { "source": "/(.*)", "destination": "/index.html" }
   ]
 }
